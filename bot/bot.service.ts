@@ -16,10 +16,15 @@ export class BotService implements OnModuleInit {
     this.bot = new Telegraf(token);
 
     // Команда /start
-    this.bot.start((ctx) => {
-      ctx.reply(WELCOME_MESSAGE);
-      ctx.reply('Доступные команды:\n' + COMMANDS_LIST.join('\n'));
-    });
+
+this.bot.start(async (ctx) => {
+  // Отправляем картинку
+  await ctx.replyWithPhoto('blob:https://web.telegram.org/a00fca3d-35c5-4943-826d-a313182fa627');
+
+  // Отправляем текст
+  await ctx.reply(WELCOME_MESSAGE);
+  await ctx.reply('Доступные команды:\n' + COMMANDS_LIST.join('\n'));
+});
 
     // Заглушка для всех сообщений
     this.bot.on('message', (ctx) => {
