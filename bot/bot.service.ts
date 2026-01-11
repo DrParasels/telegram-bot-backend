@@ -19,7 +19,7 @@ export class BotService implements OnModuleInit {
 
         this.bot.start(async (ctx) => {
             // Отправляем картинку
-            await ctx.replyWithPhoto('blob:https://web.telegram.org/a00fca3d-35c5-4943-826d-a313182fa627');
+            await ctx.replyWithPhoto('https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcSjV8SLON8TgqrDL8puk0roiBKhDEZhIRQsxA&s');
 
             // Отправляем текст
             await ctx.reply(WELCOME_MESSAGE);
