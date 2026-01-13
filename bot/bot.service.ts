@@ -1,154 +1,231 @@
 import { Injectable, OnModuleInit } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { Telegraf, Markup } from 'telegraf';
-import { SERVICES, BOOKINGS } from './bot.constants';
 import { USER_STATE } from './bot-state';
+import { BOOKINGS, SERVICES, TIME_SLOTS } from './bot.constants';
 
 @Injectable()
 export class BotService implements OnModuleInit {
-    private bot: Telegraf<any>;
+  private bot: Telegraf<any>;
 
-    constructor(private configService: ConfigService) { }
+  constructor(private configService: ConfigService) {}
 
-    onModuleInit() {
-        const token = this.configService.get<string>('BOT_TOKEN');
-        if (!token) throw new Error('BOT_TOKEN не задан');
+  onModuleInit() {
+    const token = this.configService.get<string>('BOT_TOKEN');
+    if (!token) throw new Error('BOT_TOKEN не задан');
 
-        this.bot = new Telegraf(token);
+    this.bot = new Telegraf(token);
 
-        this.bot.start(async (ctx) => {
-            USER_STATE.set(ctx.from.id, { step: 'idle' });
+    /* ===== START ===== */
+    this.bot.start(async (ctx) => {
+      USER_STATE.set(ctx.from.id, { step: 'idle' });
 
-            await ctx.reply(
-                'Привет! Я бот для записи на услуги.',
-                Markup.keyboard([['📅 Записаться'], ['📋 Мои записи']]).resize()
-            );
-        });
+      await ctx.reply(
+        'Привет! Я бот для записи на услуги.',
+        Markup.keyboard([['📅 Записаться'], ['📋 Мои записи']]).resize()
+      );
+    });
 
-        // Записаться
-        this.bot.hears('📅 Записаться', async (ctx) => {
-            USER_STATE.set(ctx.from.id, { step: 'service' });
+    /* ===== ЗАПИСАТЬСЯ ===== */
+    this.bot.hears('📅 Записаться', async (ctx) => {
+      USER_STATE.set(ctx.from.id, { step: 'service' });
 
-            await ctx.reply(
-                'Выберите услугу:',
-                Markup.inlineKeyboard(
-                    SERVICES.map((s) =>
-                        Markup.button.callback(s.name, `service_${s.id}`)
-                    )
-                )
-            );
-        });
+      await ctx.reply(
+        'Выберите услугу:',
+        Markup.inlineKeyboard([
+          ...SERVICES.map((s) => [Markup.button.callback(s.name, `service_${s.id}`)]),
+          [Markup.button.callback('❌ Отменить', 'cancel')],
+        ])
+      );
+    });
 
-        // Выбор услуги
-        this.bot.action(/service_(\d+)/, async (ctx) => {
-            const serviceId = Number(ctx.match[1]);
-            USER_STATE.set(ctx.from.id, { step: 'date', serviceId });
+    /* ===== ВЫБОР УСЛУГИ ===== */
+    this.bot.action(/service_(\d+)/, async (ctx) => {
+      const serviceId = Number(ctx.match[1]);
+      const service = SERVICES.find((s) => s.id === serviceId);
+      if (!service) return;
 
-            await ctx.editMessageText(
-                'Выберите дату:',
-                Markup.inlineKeyboard([
-                    Markup.button.callback('Сегодня', `date_today`),
-                    Markup.button.callback('Завтра', `date_tomorrow`),
-                ])
-            );
-        });
+      USER_STATE.set(ctx.from.id, { step: 'date', serviceId });
 
-        // Выбор даты
-        this.bot.action(/date_(today|tomorrow)/, async (ctx) => {
-            const date =
-                ctx.match[1] === 'today'
-                    ? new Date()
-                    : new Date(Date.now() + 86400000);
+      await ctx.editMessageText(
+        `Вы выбрали услугу: ${service.name}\n\nВыберите дату:`,
+        Markup.inlineKeyboard([
+          [
+            Markup.button.callback('Сегодня', 'date_today'),
+            Markup.button.callback('Завтра', 'date_tomorrow'),
+          ],
+          [Markup.button.callback('⬅ Назад', 'back_to_service')],
+          [Markup.button.callback('❌ Отменить', 'cancel')],
+        ])
+      );
+    });
 
-            const dateStr = date.toISOString().slice(0, 10);
+    /* ===== НАЗАД К УСЛУГАМ ===== */
+    this.bot.action('back_to_service', async (ctx) => {
+      USER_STATE.set(ctx.from.id, { step: 'service' });
 
-            const state = USER_STATE.get(ctx.from.id);
-            USER_STATE.set(ctx.from.id, { ...state, step: 'time', date: dateStr });
+      await ctx.editMessageText(
+        'Выберите услугу:',
+        Markup.inlineKeyboard([
+          ...SERVICES.map((s) => [Markup.button.callback(s.name, `service_${s.id}`)]),
+          [Markup.button.callback('❌ Отменить', 'cancel')],
+        ])
+      );
+    });
 
-            await ctx.editMessageText(
-                'Выберите время:',
-                Markup.inlineKeyboard([
-                    Markup.button.callback('10:00', 'time_10:00'),
-                    Markup.button.callback('12:00', 'time_12:00'),
-                    Markup.button.callback('14:00', 'time_14:00'),
-                ])
-            );
-        });
+    /* ===== ВЫБОР ДАТЫ ===== */
+    this.bot.action(/date_(today|tomorrow)/, async (ctx) => {
+      const state = USER_STATE.get(ctx.from.id);
+      if (!state || !state.serviceId) return;
 
-        // Выбор времени
-        this.bot.action(/time_(\d{2}:\d{2})/, async (ctx) => {
-            const time = ctx.match[1];
-            const userId = ctx.from.id;
+      const service = SERVICES.find((s) => s.id === state.serviceId);
+      if (!service) return;
 
-            const state = USER_STATE.get(userId);
+      const date = ctx.match[1] === 'today' ? new Date() : new Date(Date.now() + 86400000);
+      const dateStr = date.toISOString().slice(0, 10);
 
-            if (!state || !state.serviceId || !state.date) {
-                USER_STATE.set(userId, { step: 'idle' });
-                await ctx.reply('Что-то пошло не так. Начнём сначала. Напишите /start');
-                return;
-            }
+      USER_STATE.set(ctx.from.id, { ...state, step: 'time', date: dateStr });
 
-            const service = SERVICES.find((s) => s.id === state.serviceId);
+      await ctx.editMessageText(
+        `Вы выбрали услугу: ${service.name}\nВыбрана дата: ${dateStr}\n\nТеперь выберите время:`,
+        Markup.inlineKeyboard([
+          TIME_SLOTS.map((t) => Markup.button.callback(t, `time_${t}`)),
+          [Markup.button.callback('⬅ Назад', 'back_to_date')],
+          [Markup.button.callback('❌ Отменить', 'cancel')],
+        ])
+      );
+    });
 
-            if (!service) {
-                USER_STATE.set(userId, { step: 'idle' });
-                await ctx.reply('Услуга не найдена. Начнём сначала. Напишите /start');
-                return;
-            }
+    /* ===== НАЗАД К ДАТЕ ===== */
+    this.bot.action('back_to_date', async (ctx) => {
+      const state = USER_STATE.get(ctx.from.id);
+      if (!state || !state.serviceId) return;
 
-            USER_STATE.set(userId, {
-                ...state,
-                step: 'confirm',
-                time,
-            });
+      const service = SERVICES.find((s) => s.id === state.serviceId);
+      if (!service) return;
 
-            await ctx.editMessageText(
-                `Подтвердите запись:\n\nУслуга: ${service.name}\nДата: ${state.date}\nВремя: ${time}`,
-                Markup.inlineKeyboard([
-                    Markup.button.callback('✅ Подтвердить', 'confirm'),
-                    Markup.button.callback('❌ Отменить', 'cancel'),
-                ])
-            );
-        });
+      USER_STATE.set(ctx.from.id, { step: 'date', serviceId: state.serviceId });
 
-        // Подтверждение
-        this.bot.action('confirm', async (ctx) => {
-            const userId = ctx.from.id;
-            const state = USER_STATE.get(userId);
+      await ctx.editMessageText(
+        `Вы выбрали услугу: ${service.name}\n\nВыберите дату:`,
+        Markup.inlineKeyboard([
+          [
+            Markup.button.callback('Сегодня', 'date_today'),
+            Markup.button.callback('Завтра', 'date_tomorrow'),
+          ],
+          [Markup.button.callback('⬅ Назад', 'back_to_service')],
+          [Markup.button.callback('❌ Отменить', 'cancel')],
+        ])
+      );
+    });
 
-            if (
-                !state ||
-                state.step !== 'confirm' ||
-                state.serviceId == null ||
-                !state.date ||
-                !state.time
-            ) {
-                USER_STATE.set(userId, { step: 'idle' });
-                await ctx.reply('Сессия устарела. Начнём сначала. Напишите /start');
-                return;
-            }
+    /* ===== ВЫБОР ВРЕМЕНИ ===== */
+    this.bot.action(/time_(\d{2}:\d{2})/, async (ctx) => {
+      const time = ctx.match[1];
+      const userId = ctx.from.id;
+      const state = USER_STATE.get(userId);
 
-            BOOKINGS.push({
-                id: BOOKINGS.length + 1,
-                userId,
-                serviceId: state.serviceId,
-                date: state.date,
-                time: state.time,
-                status: 'active',
-            });
+      if (!state || !state.serviceId || !state.date) return;
 
-            USER_STATE.set(userId, { step: 'idle' });
+      const service = SERVICES.find((s) => s.id === state.serviceId);
+      if (!service) return;
 
-            await ctx.editMessageText('✅ Вы успешно записаны!');
-        });
+      USER_STATE.set(userId, { ...state, step: 'confirm', time });
 
-        // Отмена
-        this.bot.action('cancel', async (ctx) => {
-            USER_STATE.set(ctx.from.id, { step: 'idle' });
-            await ctx.editMessageText('Запись отменена.');
-        });
+      await ctx.editMessageText(
+        `Вы выбрали услугу: ${service.name}\nВыбрана дата: ${state.date}\nВыбрано время: ${time}\n\nПодтвердите запись:`,
+        Markup.inlineKeyboard([
+          [Markup.button.callback('✅ Подтвердить', 'confirm')],
+          [Markup.button.callback('⬅ Назад', 'back_to_time')],
+          [Markup.button.callback('❌ Отменить', 'cancel')],
+        ])
+      );
+    });
 
-        this.bot.launch();
-        console.log('Telegram Bot запущен 🚀');
-    }
+    /* ===== НАЗАД К ВРЕМЕНИ ===== */
+    this.bot.action('back_to_time', async (ctx) => {
+      const state = USER_STATE.get(ctx.from.id);
+      if (!state || !state.serviceId || !state.date) return;
+
+      const service = SERVICES.find((s) => s.id === state.serviceId);
+      if (!service) return;
+
+      USER_STATE.set(ctx.from.id, { step: 'time', serviceId: state.serviceId, date: state.date });
+
+      await ctx.editMessageText(
+        `Вы выбрали услугу: ${service.name}\nВыбрана дата: ${state.date}\n\nТеперь выберите время:`,
+        Markup.inlineKeyboard([
+          TIME_SLOTS.map((t) => Markup.button.callback(t, `time_${t}`)),
+          [Markup.button.callback('⬅ Назад', 'back_to_date')],
+          [Markup.button.callback('❌ Отменить', 'cancel')],
+        ])
+      );
+    });
+
+    /* ===== ПОДТВЕРЖДЕНИЕ ===== */
+    this.bot.action('confirm', async (ctx) => {
+      const userId = ctx.from.id;
+      const state = USER_STATE.get(userId);
+
+      if (!state || !state.serviceId || !state.date || !state.time) {
+        USER_STATE.set(userId, { step: 'idle' });
+        await ctx.reply('Сессия устарела. Напишите /start');
+        return;
+      }
+
+      const service = SERVICES.find((s) => s.id === state.serviceId);
+      if (!service) return;
+
+      BOOKINGS.push({
+        id: BOOKINGS.length + 1,
+        userId,
+        serviceId: state.serviceId,
+        date: state.date,
+        time: state.time,
+        status: 'active',
+      });
+
+      USER_STATE.set(userId, { step: 'idle' });
+
+      await ctx.editMessageText(
+        `✅ Вы успешно записаны!\n\n` +
+        `Услуга: ${service.name}\n` +
+        `Дата: ${state.date}\n` +
+        `Время: ${state.time}\n\n` +
+        `Если что-то изменится или потребуется дополнительная информация, мы обязательно с вами свяжемся. ` +
+        `Спасибо, что выбрали нас!`
+      );
+    });
+
+    /* ===== ОТМЕНА ===== */
+    this.bot.action('cancel', async (ctx) => {
+      USER_STATE.set(ctx.from.id, { step: 'idle' });
+      await ctx.reply('Запись отменена.');
+    });
+
+    /* ===== МОИ ЗАПИСИ ===== */
+    this.bot.hears('📋 Мои записи', async (ctx) => {
+      const userBookings = BOOKINGS.filter(
+        (b) => b.userId === ctx.from.id && b.status === 'active'
+      );
+
+      if (!userBookings.length) {
+        await ctx.reply('У вас нет активных записей.');
+        return;
+      }
+
+      const text = userBookings
+        .map((b) => {
+          const service = SERVICES.find((s) => s.id === b.serviceId);
+          return `• ${service?.name} — ${b.date} ${b.time}`;
+        })
+        .join('\n');
+
+      await ctx.reply(`Ваши записи:\n\n${text}`);
+    });
+
+    /* ===== LAUNCH ===== */
+    this.bot.launch();
+    console.log('Telegram Bot запущен 🚀');
+  }
 }

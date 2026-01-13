@@ -1,5 +1,7 @@
+export type Step = 'idle' | 'service' | 'date' | 'time' | 'confirm';
+
 export interface BotState {
-  step: 'idle' | 'service' | 'date' | 'time' | 'confirm';
+  step: Step;
   serviceId?: number;
   date?: string;
   time?: string;
